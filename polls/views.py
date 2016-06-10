@@ -23,6 +23,8 @@ from bs4 import BeautifulSoup
 patt = re.compile('[ \n]')
 site = 'http://www.leidsa.com/sorteos-anteriores'
 main_site = 'http://www.leidsa.com/'
+loto_real_site = 'http://www.lotoreal.com.do/resultados'
+
 hdr = {'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.11 (KHTML, like Gecko) Chrome/23.0.1271.64 Safari/537.11',
        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
        'Accept-Charset': 'ISO-8859-1,utf-8;q=0.7,*;q=0.3',
@@ -34,6 +36,30 @@ hdr = {'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.11 (KHTML,
 def index(request):
     return HttpResponse("Hello, world. You're at the polls index.")
 
+# Obtains data from the Loto Real page
+def get_lotoreal_data():
+	# Loto Real
+	monto_real = 0
+	try:
+		real_req = urllib2.Request(loto_real_site, headers=hdr)
+		try:
+			loto_real_page = urllib2.urlopen(real_req)
+		except urllib2.HTTPError, e:
+			pass
+
+		real_content = loto_real_page.read()
+		real = BeautifulSoup(real_content, "html.parser")
+
+		try:
+			monto_real = float(real.find(id='rc-millones-acumulados').h2.string)
+		except e:
+			monto_real = 0
+	except e:
+		monto_real = 0
+
+	return { "amount": monto_real }
+
+# Parses the lotery web page and returns a response with the data
 def games(request):
 	# Http request to web server
 	req = urllib2.Request(site, headers=hdr)
@@ -53,7 +79,7 @@ def games(request):
 	content = page.read()
 	main_content = main_page.read()
 
-	d = []
+	games_data = []
 	# Gets the table data from the html content
 	try:
 		table = re.search(r'<tbody>([.\n\s\S]+)<\/tbody>', content, re.MULTILINE)
@@ -66,7 +92,7 @@ def games(request):
 	loto = int(slider.find(id="acumu-loto").string)
 	loto_mas = int(slider.find(id="acumu-mas").contents[1].replace('\u00a0', ''))
 
-	next_game = {"amount": monto, "loto": loto, "loto_mas": loto_mas}
+	next_game = {"leidsa": {"amount": monto, "loto": loto, "loto_mas": loto_mas}, "lotoreal": get_lotoreal_data()}
 
 	# Counter initialization
 	c = 0;
@@ -90,17 +116,26 @@ def games(request):
 				game = cells[2]
 				shift = cells[3].replace('&nbsp;', '')
 				numbers = map(lambda x: int(x), patt.split(cells[4]))
-				d.append({'date': date, 'game': game, 'shift': shift, 'numbers': numbers})
+				games_data.append({'date': date, 'game': game, 'shift': shift, 'numbers': numbers})
+
+			# Load numbers form Loteka
+			try:
+				loteka = json.load(urllib2.urlopen('http://www.loteka.com/app/do/draw_jsonrequest.aspx?JSONrequest=true&JSONquery=QuinielaLotekaCurrent'))
+				lo = {'date': str(loteka['drawDate']), 'game': "LOTEKA", 'shift': "NOCHE", 'numbers': map(lambda x: int(x), [loteka['number1'], loteka['number2'], loteka['number3']])}
+				games_data.append(lo)
+			except e:
+				print "Error loading Loteka Numbers"
 
 			gmt4 = GMT4()
 			jsonFile = {"datestamp": datetime.datetime.now(gmt4).strftime("%d/%m/%y %H:%M %p"),
                 "saved_amount": next_game,
-                "games": d}
+                "games": games_data}
 			return HttpResponse(json.dumps(jsonFile, sort_keys=True, indent=4, separators=(',', ': ')))
 		except:
-			HttpResponseNotFound("No data")
+			return HttpResponseNotFound("No data")
 	else:
 		return HttpResponseNotFound("No data")
+
 
 class GMT4(datetime.tzinfo):
 	def utcoffset(self,dt):
